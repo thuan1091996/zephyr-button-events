@@ -6,67 +6,126 @@
  * Tested on nRF Connect SDK Version : 2.0
  */
 
+/******************************************************************************
+* Includes
+*******************************************************************************/
 #include <zephyr/kernel.h>
-#include <drivers/gpio.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/devicetree.h>
 
-/* STEP 9 - Increase the sleep time from 100ms to 10 minutes  */
+/******************************************************************************
+* Module Preprocessor Constants
+*******************************************************************************/
 #define SLEEP_TIME_MS   100
 
-/* SW0_NODE is the devicetree node identifier for the "sw0" alias */
-#define SW0_NODE	DT_ALIAS(sw0) 
-static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SW0_NODE, gpios);
+#define MODULE_NAME			main_module
+#define MODULE_LOG_LEVEL	LOG_LEVEL_DBG
+LOG_MODULE_REGISTER(MODULE_NAME, MODULE_LOG_LEVEL);
 
-/* LED0_NODE is the devicetree node identifier for the "led0" alias. */
-#define LED0_NODE	DT_ALIAS(led0)
-static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
-
-
-
-/* STEP 4 - Define the callback function */
-void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+/******************************************************************************
+* Module Variable Definitions
+*******************************************************************************/
+static struct gpio_callback pin_cb_data; /* Callback struct required by kernel */
+void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins) /* Actually handler being called by ISR */
 {
-    gpio_pin_toggle_dt(&led);
+	LOG_INF("Button interrupt executed");
 }
-/* STEP 5 - Define a variable of type static struct gpio_callback */
-static struct gpio_callback pin_cb_data;
 
+
+/******************************************************************************
+* Function Prototypes
+*******************************************************************************/
+int led_init(struct gpio_dt_spec* p_led_device);
+int button_init(struct gpio_dt_spec* p_button_device);
+int button_int_init(struct gpio_dt_spec* p_button_device);
+
+/******************************************************************************
+* Function Definitions
+*******************************************************************************/
 void main(void)
 {
 	int ret;
 
-	if (!device_is_ready(led.port)) {
-		return;
-	}
+	/* LED Init */
+	static struct gpio_dt_spec custom_led = GPIO_DT_SPEC_GET(DT_NODELABEL(custom_led), gpios);
+	led_init(&custom_led);
 
-	if (!device_is_ready(button.port)) {
-		return;
-	}
+	/* Button Init */
+	static struct gpio_dt_spec custom_button = GPIO_DT_SPEC_GET(DT_NODELABEL(custom_button0), gpios);
+	button_int_init(&custom_button);
 
-	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
-	if (ret < 0) {
-		return;
-	}
-
-	ret = gpio_pin_configure_dt(&button, GPIO_INPUT);
-	if (ret < 0) {
-		return;
-	}
-
-	/* STEP 3 - Configure the interrupt on the button's pin */
-	ret = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
-	if (ret < 0) {
-		return;
-	}
-	/* STEP 6 - Initialize the static struct gpio_callback variable   */
-	gpio_pin_set_dt(&led, 1);
-	gpio_pin_set_dt(&led, 0);
-    
-	/* STEP 7 - Add the callback function by calling gpio_add_callback()   */
-	gpio_init_callback(&pin_cb_data, button_pressed, BIT(button.pin));
-	gpio_add_callback(button.port, &pin_cb_data);
 	while (1) {
-		/* STEP 8 - Remove the polling code */
-
+		gpio_pin_toggle_dt(&custom_led);
         k_msleep(SLEEP_TIME_MS); 
 	}
+}
+
+/**
+ * @brief Init led from devicetree
+ * @param p_led_device: pointer to led device struct 
+ * @return 0 if success, error code otherwise int 
+ */
+int led_init(struct gpio_dt_spec* p_led_device)
+{
+	int ret;
+	if (!device_is_ready(p_led_device->port)) {
+		LOG_ERR("LED device not ready");
+		return EIO;
+	}
+
+	ret = gpio_pin_configure_dt(p_led_device, GPIO_OUTPUT_ACTIVE);
+	if (ret < 0) {
+		LOG_ERR("Failed to config LED with err: %d", ret);
+		return ret;
+	}
+	LOG_INF("LED init succesfully");
+	return 0;
+}
+
+/**
+ * @brief Init button from devicetree
+ * @param p_button_device: pointer to button device struct 
+ * @return 0 if success, error code otherwise int 
+ */
+int button_init(struct gpio_dt_spec* p_button_device)
+{
+	int ret = 0;
+	if (!device_is_ready(p_button_device->port)) {
+		LOG_ERR("Button device not ready");
+		return EIO;
+	}
+
+	ret = gpio_pin_configure_dt(p_button_device, GPIO_INPUT);
+	if (ret < 0) {
+		LOG_ERR("Failed to config button with err: %d", ret);
+		return ret;
+	}
+	LOG_INF("BUTTON init succesfully");
+	return ret;
+}
+
+int button_int_init(struct gpio_dt_spec* p_button_device)
+{
+	int ret;
+
+	ret = button_init(p_button_device);
+	if (ret < 0) {
+		LOG_ERR("Failed to init button with err: %d", ret);
+		return ret;
+	}
+	ret = gpio_pin_interrupt_configure_dt(p_button_device, GPIO_INT_EDGE_TO_ACTIVE);
+	if (ret < 0) {
+		LOG_ERR("Failed to config interrupt with err: %d", ret);
+		return ret;
+	}
+
+	gpio_init_callback(&pin_cb_data, button_pressed, BIT(p_button_device->pin));
+	ret = gpio_add_callback(p_button_device->port, &pin_cb_data); /* Enable interrupt */
+	if (ret < 0) {
+		LOG_ERR("Failed to enable button interrupt with err: %d", ret);
+		return ret;
+	}
+	return 0;
 }
